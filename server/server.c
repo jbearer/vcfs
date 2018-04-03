@@ -1,4 +1,5 @@
 #include <netinet/ip.h>
+#include <signal.h>
 #include <stdbool.h>
 #include <stdlib.h>
 #include <stdio.h>
@@ -10,10 +11,87 @@
 typedef struct client_connection
 {
     int                         fd;
+    struct client_connection   *prev;
     struct client_connection   *next;
 } client_connection;
 
 client_connection *clients = NULL;
+
+/**
+ * Initialie a TCP server at the given port and begin listening for connections.
+ *
+ * Returns a file descriptor for the server.
+ */
+int init_tcp_server(int port)
+{
+    int sockfd = socket(AF_INET, SOCK_STREAM, 0);
+    if (sockfd < 0) {
+        perror("socket");
+        abort();
+    }
+
+    int optval = 1;
+    setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, (const void *)&optval , sizeof(int));
+
+    struct sockaddr_in hookaddr = {0};
+    hookaddr.sin_family = AF_INET;
+    hookaddr.sin_port = htons(port);
+    hookaddr.sin_addr.s_addr = htonl(INADDR_ANY);
+    if (bind(sockfd, (struct sockaddr *) &hookaddr, sizeof(hookaddr)) < 0) {
+        perror("bind");
+        abort();
+    }
+
+    if (listen(sockfd, 16) < 0) {
+        perror("listen");
+        abort();
+    }
+
+    return sockfd;
+}
+
+/**
+ * Add a file descriptor to the list of active clients.
+ */
+void add_client(int fd)
+{
+    client_connection *conn = (client_connection *)malloc(sizeof(client_connection));
+    if (conn == NULL) {
+        perror("malloc");
+        return;
+    }
+
+    conn->fd = fd;
+    if (clients) {
+        clients->prev = conn;
+    }
+    conn->next = clients;
+    conn->prev = NULL;
+    clients = conn;
+}
+
+/**
+ * Remove an active client, freeing its resources and closing the TCP connection.
+ */
+client_connection * remove_client(client_connection *c)
+{
+    if (c->prev) {
+        c->prev->next = c->next;
+    }
+    if (c->next) {
+        c->next->prev = c->prev;
+    }
+    if (c == clients) {
+        clients = c->next;
+    }
+
+    client_connection *next = c->next;
+
+    close(c->fd);
+    free(c);
+
+    return next;
+}
 
 int main(int argc, char **argv)
 {
@@ -25,43 +103,11 @@ int main(int argc, char **argv)
     int port = atoi(argv[1]);
     int hookport = atoi(argv[2]);
 
-    int hookfd = socket(AF_INET, SOCK_STREAM, 0);
-    if (hookfd < 0) {
-        perror("client socket");
-        return 1;
-    }
+    int hookfd = init_tcp_server(hookport);
+    int serverfd = init_tcp_server(port);
 
-    struct sockaddr_in hookaddr = {0};
-    hookaddr.sin_family = AF_INET;
-    hookaddr.sin_port = htons(hookport);
-    hookaddr.sin_addr.s_addr = htonl(INADDR_ANY);
-    if (bind(hookfd, (struct sockaddr *) &hookaddr, sizeof(hookaddr)) < 0) {
-        perror("hook bind");
-        return 1;
-    }
-
-    if (listen(hookfd, 16) < 0) {
-        perror("hook listen");
-        return 1;
-    }
-
-    int serverfd = socket(AF_INET, SOCK_STREAM, 0);
-    if (serverfd < 0) {
-        perror("socket");
-        return 1;
-    }
-
-    struct sockaddr_in addr = {0};
-    addr.sin_family = AF_INET;
-    addr.sin_port = htons(port);
-    addr.sin_addr.s_addr = htonl(INADDR_ANY);
-    if (bind(serverfd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
-        perror("bind");
-        return 1;
-    }
-
-    if (listen(serverfd, 16) < 0) {
-        perror("listen");
+    if (signal(SIGPIPE, SIG_IGN) == SIG_ERR) {
+        perror("signal");
         return 1;
     }
 
@@ -83,50 +129,41 @@ int main(int argc, char **argv)
                 return 1;
             }
 
-            int size;
+            uint32_t size;
             if (read(hook_client, &size, sizeof(size)) != sizeof(size)) {
                 perror("read");
                 return 1;
             }
+            size = ntohl(size);
+
             int bufsize = sizeof(size) + size;
             char * buf = (char *) malloc(bufsize);
             if (buf == NULL) {
                 perror("malloc");
                 return 1;
             }
-            *((int *)buf) = size;
+            *((int *)buf) = htonl(size);
             if (read(hook_client, buf+sizeof(size), size) != size) {
                 perror("read");
+                free(buf);
                 return 1;
             }
             close(hook_client);
 
             client_connection * c = clients;
-            client_connection * prev = c;
             while (c) {
                 if (write(c->fd, buf, bufsize) == -1) {
                     if (errno == EPIPE) {
-                        // lost connection to client so free from linked list
-                        if (c == clients) {
-                            prev = clients->next;
-                            close(c->fd);
-                            free(c);
-                            c = prev;
-                            clients = c;
-                        } else {
-                            prev->next = c->next;
-                            close(c->fd);
-                            free(c);
-                            c = prev->next;
-                        }
+                        c = remove_client(c);
                         continue;
                     } else {
                         perror("write error not EPIPE");
                     }
                 }
-                prev = c;
                 c = c->next;
             }
+
+            free(buf);
         }
 
         if (FD_ISSET(serverfd, &fds)) {
@@ -136,15 +173,7 @@ int main(int argc, char **argv)
                 continue;
             }
 
-            client_connection *conn = (client_connection *)malloc(sizeof(client_connection));
-            if (conn == NULL) {
-                perror("malloc");
-                continue;
-            }
-
-            conn->fd = clientfd;
-            conn->next = clients;
-            clients = conn;
+            add_client(clientfd);
         }
     }
 }
