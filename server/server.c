@@ -34,13 +34,16 @@ int main(int argc, char **argv)
     struct sockaddr_in hookaddr = {0};
     hookaddr.sin_family = AF_INET;
     hookaddr.sin_port = htons(hookport);
-    hookaddr.sin_addr.s_addr = htonl(2887533628);
-
-    if (connect(hookfd, (struct sockaddr *) &hookaddr, sizeof(hookaddr)) < 0) {
-        perror("hook connection");
+    hookaddr.sin_addr.s_addr = htonl(INADDR_ANY);
+    if (bind(hookfd, (struct sockaddr *) &hookaddr, sizeof(hookaddr)) < 0) {
+        perror("hook bind");
         return 1;
     }
 
+    if (listen(hookfd, 16) < 0) {
+        perror("hook listen");
+        return 1;
+    }
 
     int serverfd = socket(AF_INET, SOCK_STREAM, 0);
     if (serverfd < 0) {
@@ -74,8 +77,14 @@ int main(int argc, char **argv)
         }
 
         if (FD_ISSET(hookfd, &fds)) {
+            int hook_client = accept(hookfd, NULL, NULL);
+            if (hook_client < 0) {
+                perror("hook accept");
+                return 1;
+            }
+
             int size;
-            if (read(hookfd, &size, sizeof(size)) != sizeof(size)) {
+            if (read(hook_client, &size, sizeof(size)) != sizeof(size)) {
                 perror("read");
                 return 1;
             }
@@ -86,10 +95,12 @@ int main(int argc, char **argv)
                 return 1;
             }
             *((int *)buf) = size;
-            if (read(hookfd, buf+sizeof(size), size) != size) {
+            if (read(hook_client, buf+sizeof(size), size) != size) {
                 perror("read");
                 return 1;
             }
+            close(hook_client);
+
             client_connection * c = clients;
             client_connection * prev = c;
             while (c) {
