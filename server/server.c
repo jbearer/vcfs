@@ -8,6 +8,8 @@
 #include <unistd.h>
 #include <errno.h>
 
+#define LOG(fmt, ...) printf(fmt "\n", ##__VA_ARGS__)
+
 typedef struct client_connection
 {
     int                         fd;
@@ -149,17 +151,20 @@ int main(int argc, char **argv)
                 return 1;
             }
             close(hook_client);
+            LOG("Recieved message %.*s", bufsize, buf);
 
             client_connection * c = clients;
             while (c) {
                 if (write(c->fd, buf, bufsize) == -1) {
                     if (errno == EPIPE) {
+                        LOG("removing client %d", c->fd);
                         c = remove_client(c);
                         continue;
                     } else {
                         perror("write error not EPIPE");
                     }
                 }
+                LOG("sending message to client %d", c->fd);
                 c = c->next;
             }
 
@@ -173,6 +178,7 @@ int main(int argc, char **argv)
                 continue;
             }
 
+            LOG("adding client %d", clientfd);
             add_client(clientfd);
         }
     }

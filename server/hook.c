@@ -1,19 +1,22 @@
 #include <netinet/ip.h>
 #include <stdlib.h>
 #include <stdio.h>
+#include <string.h>
 #include <sys/socket.h>
 #include <sys/types.h>
 #include <unistd.h>
 
 int main(int argc, char **argv)
 {
-    if (argc != 3) {
-        fprintf(stderr, "Usage: %s <ip> <port>\n", argv[0]);
+    if (argc != 4) {
+        fprintf(stderr, "Usage: %s <ip> <port> <branch>\n", argv[0]);
         return 1;
     }
 
     const char *ip_str = argv[1];
     int port = atoi(argv[2]);
+    const char *branch_name = argv[3];
+    uint32_t branch_name_len = strlen(branch_name);
 
     int ip_bytes[4];
     if (sscanf(ip_str, "%d.%d.%d.%d", ip_bytes, ip_bytes + 1, ip_bytes + 2, ip_bytes + 3) != 4) {
@@ -39,14 +42,15 @@ int main(int argc, char **argv)
         return 1;
     }
 
-    char buf[26 + sizeof(int)];
-    *(uint32_t *)buf = htonl(26);
-    for (int i = 0; i < 26; ++i) {
-        buf[sizeof(int) + i] = 'a' + i;
-    }
+    ssize_t bufsize = sizeof(uint32_t) + branch_name_len;
+    char * buf = malloc(bufsize);
+    *(uint32_t *)buf = htonl(branch_name_len);
+    strncpy(buf + sizeof(uint32_t), branch_name, branch_name_len);
 
-    if (write(sockfd, buf, sizeof(int) + 26) != sizeof(int) + 26) {
+    if (write(sockfd, buf, bufsize) != bufsize) {
         perror("write");
         return 1;
     }
+
+    free(buf);
 }
