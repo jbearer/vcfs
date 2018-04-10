@@ -29,8 +29,11 @@
 #include <stdlib.h>
 #include <sys/time.h>
 #include <sys/types.h>
+#include <netinet/ip.h>
 
 static const char *mount_point;
+static int port;
+static unsigned long ip;
 
 typedef struct vcfs_file_handle
 {
@@ -63,6 +66,40 @@ static char *vcfs_repo_path(const char *path)
     return rpath;
 }
 
+void pull_if_needed() {
+    int sockfd = *(int *)(fuse_get_context()->private_data);
+
+    uint32_t size;
+    if (read(sockfd, &size, sizeof(size)) != sizeof(size)) {
+        if (errno == EWOULDBLOCK || errno == EAGAIN) {
+            return;
+        } else {
+            // offline mode
+            return;
+        }
+    }
+    size = ntohl(size);
+
+    char * buf = (char *) malloc(size);
+    if (buf == NULL) {
+        perror("malloc");
+        abort();
+    }
+    if (read(sockfd, buf, size) != size) {
+        perror("read");
+        abort();
+    }
+
+    printf("need to pull %.*s\n", size, buf);
+
+    if (system("git pull")) {
+        printf("failed git pull\n");
+        // either offline or merge conflict
+    }
+
+    free(buf);
+}
+
 static void * vcfs_init(struct fuse_conn_info *conn)
 {
     (void) conn;
@@ -72,12 +109,48 @@ static void * vcfs_init(struct fuse_conn_info *conn)
         abort();
     }
     free(path);
-    return NULL;
+
+    int * sockfd = (int *) malloc(sizeof(int));
+    if (sockfd == NULL) {
+        perror("malloc fail");
+        abort();
+    }
+    *sockfd = socket(AF_INET, SOCK_STREAM, 0);
+    if (*sockfd < 0) {
+        perror("socket");
+        abort();
+    }
+
+    struct sockaddr_in hookaddr = {0};
+    hookaddr.sin_family = AF_INET;
+    hookaddr.sin_port = htons(port);
+    hookaddr.sin_addr.s_addr = htonl(ip);
+
+    if (connect(*sockfd, (struct sockaddr *) &hookaddr, sizeof(hookaddr)) < 0) {
+        perror("hook connection");
+        abort();
+    }
+
+    // make socket non blocking
+    int flags = fcntl(*sockfd, F_GETFL, 0);
+    if (flags == -1) abort();
+    flags |= O_NONBLOCK;
+    if (fcntl(*sockfd, F_SETFL, flags)) abort();
+
+    return sockfd;
+}
+
+static void vcfs_destroy(void* private_data)
+{
+    close(*(int *)private_data);
+    free(private_data);
 }
 
 static int vcfs_fgetattr(const char *path, struct stat *stbuf, struct fuse_file_info *fi)
 {
     (void)path;
+
+    pull_if_needed();
 
     vcfs_file_handle *fh = (vcfs_file_handle *)fi->fh;
     return fstat(fh->fd, stbuf);
@@ -85,6 +158,8 @@ static int vcfs_fgetattr(const char *path, struct stat *stbuf, struct fuse_file_
 
 static int vcfs_getattr(const char *path, struct stat *stbuf)
 {
+    pull_if_needed();
+
     int res = 0;
 
     char *rpath = vcfs_repo_path(path);
@@ -101,6 +176,8 @@ static int vcfs_getattr(const char *path, struct stat *stbuf)
 
 static int vcfs_access(const char *path, int mask)
 {
+    pull_if_needed();
+
     int res = 0;
 
     char *rpath = vcfs_repo_path(path);
@@ -117,6 +194,8 @@ static int vcfs_access(const char *path, int mask)
 
 static int vcfs_readlink(const char *path, char *buf, size_t size)
 {
+    pull_if_needed();
+
     int res = 0;
 
     char *rpath = vcfs_repo_path(path);
@@ -137,6 +216,8 @@ static int vcfs_readlink(const char *path, char *buf, size_t size)
 static int vcfs_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
                         off_t offset, struct fuse_file_info *fi)
 {
+    pull_if_needed();
+
     DIR *dp;
     struct dirent *de;
 
@@ -162,6 +243,8 @@ static int vcfs_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
 
 static int vcfs_mknod(const char *path, mode_t mode, dev_t rdev)
 {
+    pull_if_needed();
+
     int res;
     int ret = 0;
 
@@ -186,6 +269,8 @@ static int vcfs_mknod(const char *path, mode_t mode, dev_t rdev)
 
 static int vcfs_mkdir(const char *path, mode_t mode)
 {
+    pull_if_needed();
+
     int res = 0;
 
     char * rpath = vcfs_repo_path(path);
@@ -200,6 +285,8 @@ static int vcfs_mkdir(const char *path, mode_t mode)
 
 static int vcfs_unlink(const char *path)
 {
+    pull_if_needed();
+
     int res = 0;
 
     char * rpath = vcfs_repo_path(path);
@@ -214,6 +301,8 @@ static int vcfs_unlink(const char *path)
 
 static int vcfs_rmdir(const char *path)
 {
+    pull_if_needed();
+
     int res = 0;
 
     char * rpath = vcfs_repo_path(path);
@@ -228,6 +317,8 @@ static int vcfs_rmdir(const char *path)
 
 static int vcfs_symlink(const char *to, const char *from)
 {
+    pull_if_needed();
+
     int res = 0;
 
     char * rfrom = vcfs_repo_path(from);
@@ -242,6 +333,8 @@ static int vcfs_symlink(const char *to, const char *from)
 
 static int vcfs_rename(const char *from, const char *to)
 {
+    pull_if_needed();
+
     int res = 0;
 
     char * rfrom = vcfs_repo_path(from);
@@ -270,6 +363,8 @@ static int vcfs_rename(const char *from, const char *to)
 
 static int vcfs_link(const char *from, const char *to)
 {
+    pull_if_needed();
+
     char * rfrom = vcfs_repo_path(from);
     char * rto = vcfs_repo_path(to);
 
@@ -285,6 +380,8 @@ static int vcfs_link(const char *from, const char *to)
 
 static int vcfs_chmod(const char *path, mode_t mode)
 {
+    pull_if_needed();
+
     char * rpath = vcfs_repo_path(path);
 
     int res = chmod(rpath, mode);
@@ -298,6 +395,8 @@ static int vcfs_chmod(const char *path, mode_t mode)
 
 static int vcfs_chown(const char *path, uid_t uid, gid_t gid)
 {
+    pull_if_needed();
+
     char * rpath = vcfs_repo_path(path);
 
     int res = lchown(rpath, uid, gid);
@@ -311,6 +410,8 @@ static int vcfs_chown(const char *path, uid_t uid, gid_t gid)
 
 static int vcfs_truncate(const char *path, off_t size)
 {
+    pull_if_needed();
+
     char * rpath = vcfs_repo_path(path);
 
     int res = truncate(rpath, size);
@@ -324,6 +425,8 @@ static int vcfs_truncate(const char *path, off_t size)
 
 static int vcfs_utimens(const char *path, const struct timespec ts[2])
 {
+    pull_if_needed();
+
     char * rpath = vcfs_repo_path(path);
 
     struct timeval tv[2];
@@ -344,6 +447,8 @@ static int vcfs_utimens(const char *path, const struct timespec ts[2])
 
 static int vcfs_open(const char *path, struct fuse_file_info *fi)
 {
+    pull_if_needed();
+
     int res = 0;
 
     vcfs_file_handle *fh = (vcfs_file_handle *)malloc(sizeof(vcfs_file_handle));
@@ -384,6 +489,8 @@ static int vcfs_read(const char *path, char *buf, size_t size, off_t offset,
 {
     (void)path;
 
+    pull_if_needed();
+
     vcfs_file_handle *fh = (vcfs_file_handle *)fi->fh;
 
     int res = pread(fh->fd, buf, size, offset);
@@ -398,6 +505,8 @@ static int vcfs_write(const char *path, const char *buf, size_t size,
 {
     (void)path;
 
+    pull_if_needed();
+
     vcfs_file_handle *fh = (vcfs_file_handle *)fi->fh;
 
     int res = pwrite(fh->fd, buf, size, offset);
@@ -409,6 +518,8 @@ static int vcfs_write(const char *path, const char *buf, size_t size,
 
 static int vcfs_statfs(const char *path, struct statvfs *stbuf)
 {
+    pull_if_needed();
+
     char *rpath = vcfs_repo_path(path);
 
     int res = statvfs(rpath, stbuf);
@@ -427,6 +538,8 @@ static int vcfs_fsync(const char *path, int isdatasync,
     (void)path;
     (void)isdatasync;
     (void)fi;
+
+    pull_if_needed();
 
     if (system("git diff-index --quiet HEAD --") == 0) {
         // No changes
@@ -463,6 +576,7 @@ static int vcfs_releasedir(const char *path, struct fuse_file_info *fi)
 
 static struct fuse_operations vcfs_oper = {
     .init       = vcfs_init,
+    .destroy    =vcfs_destroy,
     .getattr    = vcfs_getattr,
     .fgetattr   = vcfs_fgetattr,
     .access     = vcfs_access,
@@ -491,12 +605,21 @@ static struct fuse_operations vcfs_oper = {
 
 int main(int argc, char *argv[])
 {
-    if (argc < 2) {
-        fprintf(stderr, "Usage: %s <mnt>\n", argv[0]);
+    if (argc < 4) {
+        fprintf(stderr, "Usage: %s <mnt> <ip> <port>\n", argv[0]);
         return 1;
     }
-    mount_point = argv[argc-1];
+    mount_point = argv[argc-3];
+    const char *ip_str = argv[argc-2];
+    port = atoi(argv[argc-1]);
+
+    int ip_bytes[4];
+    if (sscanf(ip_str, "%d.%d.%d.%d", ip_bytes, ip_bytes + 1, ip_bytes + 2, ip_bytes + 3) != 4) {
+        fprintf(stderr, "Invalid ip address %s\n", ip_str);
+        return 1;
+    }
+    ip = ip_bytes[3] + ip_bytes[2]*256 + ip_bytes[1]*256*256 + ip_bytes[0]*256*256*256;
 
     umask(0);
-    return fuse_main(argc, argv, &vcfs_oper, NULL);
+    return fuse_main(argc-2, argv, &vcfs_oper, NULL);
 }
