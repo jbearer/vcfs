@@ -29,9 +29,6 @@
 #include <stdlib.h>
 #include <sys/time.h>
 #include <sys/types.h>
-#ifdef HAVE_SETXATTR
-#include <sys/xattr.h>
-#endif
 
 static const char *mount_point;
 
@@ -42,7 +39,10 @@ typedef struct vcfs_file_handle
 
 static char *vcfs_repo_path(const char *path)
 {
-    static const char *prefix = "/home/djsonner/vcfs";
+    const char *prefix = getenv("VCFS_PREFIX");
+    if (prefix == NULL) {
+        prefix = "/vcfs";
+    }
 
     size_t prefix_len = strlen(prefix);
     size_t mount_point_len = strlen(mount_point);
@@ -409,11 +409,37 @@ static int vcfs_write(const char *path, const char *buf, size_t size,
 
 static int vcfs_statfs(const char *path, struct statvfs *stbuf)
 {
-    int res;
+    char *rpath = vcfs_repo_path(path);
 
-    res = statvfs(path, stbuf);
-    if (res == -1)
-        return -errno;
+    int res = statvfs(rpath, stbuf);
+    if (res == -1) {
+        res = -errno;
+    }
+
+    free(rpath);
+
+    return res;
+}
+
+static int vcfs_fsync(const char *path, int isdatasync,
+             struct fuse_file_info *fi)
+{
+    (void)path;
+    (void)isdatasync;
+    (void)fi;
+
+    if (system("git diff-index --quiet HEAD --") == 0) {
+        // No changes
+        return 0;
+    }
+
+    if (system("git commit -am \"automated commit\"")) {
+        return -1;
+    }
+
+    if (system("git push")) {
+        return -1;
+    }
 
     return 0;
 }
@@ -427,62 +453,13 @@ static int vcfs_release(const char *path, struct fuse_file_info *fi)
     close(fh->fd);
     free(fh);
 
-    return 0;
+    return vcfs_fsync(path, 0, fi);
 }
 
 static int vcfs_releasedir(const char *path, struct fuse_file_info *fi)
 {
     return vcfs_release(path, fi);
 }
-
-static int vcfs_fsync(const char *path, int isdatasync,
-             struct fuse_file_info *fi)
-{
-    /* Just a stub.  This method is optional and can safely be left
-       unimplemented */
-
-    (void) path;
-    (void) isdatasync;
-    (void) fi;
-    return 0;
-}
-
-#ifdef HAVE_SETXATTR
-/* xattr operations are optional and can safely be left unimplemented */
-static int vcfs_setxattr(const char *path, const char *name, const char *value,
-            size_t size, int flags)
-{
-    int res = lsetxattr(path, name, value, size, flags);
-    if (res == -1)
-        return -errno;
-    return 0;
-}
-
-static int vcfs_getxattr(const char *path, const char *name, char *value,
-            size_t size)
-{
-    int res = lgetxattr(path, name, value, size);
-    if (res == -1)
-        return -errno;
-    return res;
-}
-
-static int vcfs_listxattr(const char *path, char *list, size_t size)
-{
-    int res = llistxattr(path, list, size);
-    if (res == -1)
-        return -errno;
-    return res;
-}
-
-static int vcfs_removexattr(const char *path, const char *name)
-{
-    int res = lremovexattr(path, name);
-    if (res == -1)
-        return -errno;
-    return 0;
-}
-#endif /* HAVE_SETXATTR */
 
 static struct fuse_operations vcfs_oper = {
     .init       = vcfs_init,
@@ -509,13 +486,7 @@ static struct fuse_operations vcfs_oper = {
     .statfs     = vcfs_statfs,
     .release    = vcfs_release,
     .releasedir = vcfs_releasedir,
-    .fsync      = vcfs_fsync,
-#ifdef HAVE_SETXATTR
-    .setxattr   = vcfs_setxattr,
-    .getxattr   = vcfs_getxattr,
-    .listxattr  = vcfs_listxattr,
-    .removexattr    = vcfs_removexattr,
-#endif
+    .fsync      = vcfs_fsync
 };
 
 int main(int argc, char *argv[])
