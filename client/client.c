@@ -40,9 +40,9 @@ typedef struct vcfs_file_handle
     int fd;
 } vcfs_file_handle;
 
-char *vcfs_repo_path(const char *path)
+static char *vcfs_repo_path(const char *path)
 {
-    static const char *prefix = "/vcfs";
+    static const char *prefix = "/home/djsonner/vcfs";
 
     size_t prefix_len = strlen(prefix);
     size_t mount_point_len = strlen(mount_point);
@@ -51,14 +51,28 @@ char *vcfs_repo_path(const char *path)
     char *rpath = (char *)malloc(prefix_len + mount_point_len + path_len);
     if (rpath == NULL) {
         perror("vcfs_repo_path:malloc");
-        return NULL;
+        abort();
     }
 
     strcpy(rpath, prefix);
     strcpy(rpath + prefix_len, mount_point);
     strcpy(rpath + prefix_len + mount_point_len, path);
 
+    printf("path is : %s \n", rpath);
+
     return rpath;
+}
+
+static void * vcfs_init(struct fuse_conn_info *conn)
+{
+    (void) conn;
+    char * path = vcfs_repo_path("");
+    if (chdir(path)) {
+        perror("change path");
+        abort();
+    }
+    free(path);
+    return NULL;
 }
 
 static int vcfs_fgetattr(const char *path, struct stat *stbuf, struct fuse_file_info *fi)
@@ -194,89 +208,124 @@ static int vcfs_unlink(const char *path)
     if (res == -1)
         res =  -errno;
 
+    free(rpath);
     return res;
 }
 
 static int vcfs_rmdir(const char *path)
 {
-    int res;
+    int res = 0;
 
-    res = rmdir(path);
+    char * rpath = vcfs_repo_path(path);
+
+    res = rmdir(rpath);
     if (res == -1)
-        return -errno;
+        res = -errno;
 
-    return 0;
+    free(rpath);
+    return res;
 }
 
 static int vcfs_symlink(const char *to, const char *from)
 {
-    int res;
+    int res = 0;
 
-    res = symlink(to, from);
+    char * rfrom = vcfs_repo_path(from);
+
+    res = symlink(to, rfrom);
     if (res == -1)
-        return -errno;
+        res = -errno;
 
-    return 0;
+    free(rfrom);
+    return res;
 }
 
 static int vcfs_rename(const char *from, const char *to)
 {
-    int res;
+    int res = 0;
 
-    res = rename(from, to);
-    if (res == -1)
-        return -errno;
+    char * rfrom = vcfs_repo_path(from);
+    char * rto = vcfs_repo_path(to);
 
-    return 0;
+    char * buf = malloc(30 + strlen(rfrom) + strlen(rto));
+
+    sprintf(buf, "git ls-files --error-unmatch %s", rfrom);
+    if (system(buf)) {
+        // file untracked
+        res = rename(rfrom, rto);
+        if (res == -1)
+            res = -errno;
+    } else {
+        sprintf(buf, "git mv %s %s", rfrom, rto);
+        printf("going to git mv: %s \n", buf);
+        if (system(buf)) {
+            res = -1;
+        }
+    }
+
+    free(rfrom);
+    free(rto);
+    return res;
 }
 
 static int vcfs_link(const char *from, const char *to)
 {
-    int res;
+    char * rfrom = vcfs_repo_path(from);
+    char * rto = vcfs_repo_path(to);
 
-    res = link(from, to);
+    int res = link(rfrom, rto);
     if (res == -1)
-        return -errno;
+        res = -errno;
 
-    return 0;
+    free(rto);
+    free(rfrom);
+
+    return res;
 }
 
 static int vcfs_chmod(const char *path, mode_t mode)
 {
-    int res;
+    char * rpath = vcfs_repo_path(path);
 
-    res = chmod(path, mode);
+    int res = chmod(rpath, mode);
     if (res == -1)
-        return -errno;
+        res =  -errno;
 
-    return 0;
+    free(rpath);
+
+    return res;
 }
 
 static int vcfs_chown(const char *path, uid_t uid, gid_t gid)
 {
-    int res;
+    char * rpath = vcfs_repo_path(path);
 
-    res = lchown(path, uid, gid);
+    int res = lchown(rpath, uid, gid);
     if (res == -1)
-        return -errno;
+        res = -errno;
 
-    return 0;
+    free(rpath);
+
+    return res;
 }
 
 static int vcfs_truncate(const char *path, off_t size)
 {
-    int res;
+    char * rpath = vcfs_repo_path(path);
 
-    res = truncate(path, size);
+    int res = truncate(rpath, size);
     if (res == -1)
-        return -errno;
+        res = -errno;
 
-    return 0;
+    free(rpath);
+
+    return res;
 }
 
 static int vcfs_utimens(const char *path, const struct timespec ts[2])
 {
-    int res;
+    char * rpath = vcfs_repo_path(path);
+
     struct timeval tv[2];
 
     tv[0].tv_sec = ts[0].tv_sec;
@@ -284,11 +333,13 @@ static int vcfs_utimens(const char *path, const struct timespec ts[2])
     tv[1].tv_sec = ts[1].tv_sec;
     tv[1].tv_usec = ts[1].tv_nsec / 1000;
 
-    res = utimes(path, tv);
+    int res = utimes(rpath, tv);
     if (res == -1)
-        return -errno;
+        res = -errno;
 
-    return 0;
+    free(rpath);
+
+    return res;
 }
 
 static int vcfs_open(const char *path, struct fuse_file_info *fi)
@@ -331,38 +382,28 @@ static int vcfs_opendir(const char *path, struct fuse_file_info *fi)
 static int vcfs_read(const char *path, char *buf, size_t size, off_t offset,
             struct fuse_file_info *fi)
 {
-    int fd;
-    int res;
+    (void)path;
 
-    (void) fi;
-    fd = open(path, O_RDONLY);
-    if (fd == -1)
-        return -errno;
+    vcfs_file_handle *fh = (vcfs_file_handle *)fi->fh;
 
-    res = pread(fd, buf, size, offset);
+    int res = pread(fh->fd, buf, size, offset);
     if (res == -1)
         res = -errno;
 
-    close(fd);
     return res;
 }
 
 static int vcfs_write(const char *path, const char *buf, size_t size,
              off_t offset, struct fuse_file_info *fi)
 {
-    int fd;
-    int res;
+    (void)path;
 
-    (void) fi;
-    fd = open(path, O_WRONLY);
-    if (fd == -1)
-        return -errno;
+    vcfs_file_handle *fh = (vcfs_file_handle *)fi->fh;
 
-    res = pwrite(fd, buf, size, offset);
+    int res = pwrite(fh->fd, buf, size, offset);
     if (res == -1)
         res = -errno;
 
-    close(fd);
     return res;
 }
 
@@ -444,6 +485,7 @@ static int vcfs_removexattr(const char *path, const char *name)
 #endif /* HAVE_SETXATTR */
 
 static struct fuse_operations vcfs_oper = {
+    .init       = vcfs_init,
     .getattr    = vcfs_getattr,
     .fgetattr   = vcfs_fgetattr,
     .access     = vcfs_access,
