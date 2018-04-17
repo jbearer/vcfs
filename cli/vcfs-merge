@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+set -e
+
+if [ -z "$VCFS_PREFIX" ]; then
+    VCFS_PREFIX=/vcfs
+fi
+cd "$VCFS_PREFIX/`pwd`"
+
+branch="`git branch | grep \* | awk '{ print $2 }'`"
+
+if ! git merge origin/master; then
+    conflicts_dir=".conflicts-`date +%s`"
+    mkdir "$conflicts_dir"
+    git diff --name-only --diff-filter=U  | xargs -i ln -s "`pwd`/{}" "$conflicts_dir/{}"
+    nano "$conflicts_dir"/*
+    rm -r "$conflicts_dir"
+fi
+
+git commit -am "merge branch $branch"
+git push
+
+git checkout master
+git rebase "$branch"
+if ! git merge; then
+    git merge --abort
+    echo "Branch still conflicts!"
+    exit 1
+fi
+git push
+
+git branch -d "$branch"

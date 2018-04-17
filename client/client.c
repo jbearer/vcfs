@@ -30,6 +30,9 @@
 #include <sys/time.h>
 #include <sys/types.h>
 #include <netinet/ip.h>
+#include <inttypes.h>
+
+#define LOG(fmt, ...) printf(fmt "\n", ##__VA_ARGS__)
 
 static const char *mount_point;
 static int port;
@@ -69,35 +72,76 @@ static char *vcfs_repo_path(const char *path)
 void pull_if_needed() {
     int sockfd = *(int *)(fuse_get_context()->private_data);
 
+    char *branch = NULL;
+    FILE *branch_output = popen("git branch | grep \\* | awk '{ print $2 }'", "r");
+
+    size_t line_cap;
+    ssize_t branch_len = getline(&branch, &line_cap, branch_output);
+    if (branch_len < 0) {
+        perror("getline");
+        return;
+    }
+
     uint32_t size;
-    if (read(sockfd, &size, sizeof(size)) != sizeof(size)) {
-        if (errno == EWOULDBLOCK || errno == EAGAIN) {
-            return;
-        } else {
-            // offline mode
-            return;
+    while (read(sockfd, &size, sizeof(size)) > 0) {
+        size = ntohl(size);
+
+        char * buf = (char *) malloc(size);
+        if (buf == NULL) {
+            perror("malloc");
+            abort();
+        }
+        if (read(sockfd, buf, size) != size) {
+            perror("read");
+            abort();
+        }
+
+        if (branch[branch_len-1] == '\n') {
+            --branch_len;
+        }
+        if (size != branch_len || strncmp(branch, buf, size) != 0) {
+            LOG("on branch with length %d", (int)branch_len);
+            LOG("on branch %.*s", (int)branch_len, branch);
+            LOG("skipping branch with length %d", (int)size);
+            LOG("skipping branch %.*s", (int)size, buf);
+            continue;
+        }
+
+        printf("need to pull %.*s\n", size, buf);
+        free(buf);
+
+        if (system("git fetch")) {
+            printf("failed git pull due to offline mode\n");
+        } else if (system("git merge -m \"automated merge\"")) {
+            // merge conflict
+            if (system("git merge --abort")) {
+                printf("merge abort error\n");
+                break;
+            }
+
+            uint64_t timestamp = time(NULL);
+            char git_cmd[50];
+            sprintf(git_cmd, "git checkout -b %"PRIu64, timestamp);
+            if (system(git_cmd)) {
+                printf("new branch creation failure\n");
+                abort();
+            }
+            sprintf(git_cmd, "git push -u origin %"PRIu64, timestamp);
+            if (system(git_cmd)) {
+                printf("push failure\n");
+                abort();
+            }
+
+            LOG("Merge conflict. Switching to new branch. Resolve conflict when possible");
         }
     }
-    size = ntohl(size);
-
-    char * buf = (char *) malloc(size);
-    if (buf == NULL) {
-        perror("malloc");
-        abort();
+    free(branch);
+    if (errno == EWOULDBLOCK || errno == EAGAIN) {
+        return;
+    } else {
+        // offline mode
+        return;
     }
-    if (read(sockfd, buf, size) != size) {
-        perror("read");
-        abort();
-    }
-
-    printf("need to pull %.*s\n", size, buf);
-
-    if (system("git pull")) {
-        printf("failed git pull\n");
-        // either offline or merge conflict
-    }
-
-    free(buf);
 }
 
 static void * vcfs_init(struct fuse_conn_info *conn)
@@ -539,16 +583,17 @@ static int vcfs_fsync(const char *path, int isdatasync,
     (void)isdatasync;
     (void)fi;
 
-    pull_if_needed();
-
     if (system("git diff-index --quiet HEAD --") == 0) {
         // No changes
+        pull_if_needed();
         return 0;
     }
 
     if (system("git commit -am \"automated commit\"")) {
         return -1;
     }
+
+    pull_if_needed();
 
     if (system("git push")) {
         return -1;
