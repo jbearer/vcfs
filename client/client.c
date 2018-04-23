@@ -54,7 +54,7 @@ static char *vcfs_repo_path(const char *path)
     size_t mount_point_len = strlen(mount_point);
     size_t path_len = strlen(path);
 
-    char *rpath = (char *)malloc(prefix_len + mount_point_len + path_len);
+    char *rpath = (char *)malloc(prefix_len + mount_point_len + path_len + 1);
     if (rpath == NULL) {
         perror("vcfs_repo_path:malloc");
         abort();
