@@ -1,0 +1,13 @@
+function vcfs_prefix()
+{
+    if [ -z "$VCFS_PREFIX" ]; then
+        echo /vcfs
+    else
+        echo "$VCFS_PREFIX"
+    fi
+}
+
+function cd_repo()
+{
+    cd "`vcfs_prefix`/`pwd`"
+}

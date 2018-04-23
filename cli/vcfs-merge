@@ -1,10 +1,9 @@
 #!/usr/bin/env bash
 set -e
 
-if [ -z "$VCFS_PREFIX" ]; then
-    VCFS_PREFIX=/vcfs
-fi
-cd "$VCFS_PREFIX/`pwd`"
+source vcfs-lib
+
+cd_repo
 
 branch="`git branch | grep \* | awk '{ print $2 }'`"
 

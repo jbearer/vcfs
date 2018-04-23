@@ -1,4 +1,8 @@
 #!/bin/bash
 
+if [ -z "$VCFS_HOOK_PORT" ]; then
+    VCFS_HOOK_PORT=9092
+fi
+
 BRANCH_NAME=`cat | cut -d " " -f 3 | cut -d "/" -f 3`
-./hooks/hook `ifconfig | grep 'inet ' | grep -v '127.0.0.1' | awk '{ print $2 }'` 9092 $BRANCH_NAME
+./hooks/hook `ifconfig | grep 'inet ' | grep -v '127.0.0.1' | awk '{ print $2 }'` "$VCFS_HOOK_PORT" "$BRANCH_NAME"

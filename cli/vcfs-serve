@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+
+set -e
+
+if [[ $# != 1 ]]; then
+    echo "Usage: $0 <repo>" >&2
+    exit 1
+fi
+
+repo="$1"
+
+if [ -z "$VCFS_HOOK_PORT" ]; then
+    VCFS_HOOK_PORT=9092
+fi
+
+if [ -z "$VCFS_CLIENT_PORT" ]; then
+    VCFS_CLIENT_PORT=9091
+fi
+
+if [ ! -d "$repo" ]; then
+    mkdir -p "$repo"
+    cd "$repo"
+    git init --bare
+    cd "hooks"
+    git clone https://github.com/jbearer/vcfs.git .vcfs
+    make -C .vcfs/server
+    cp ./.vcfs/server/{hook,server,post-receive} .
+else
+    cd "$repo/hooks"
+fi
+
+./server "$VCFS_CLIENT_PORT" "$VCFS_HOOK_PORT"

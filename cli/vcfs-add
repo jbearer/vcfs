@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+set -e
+
+source vcfs-lib
+
+if [[ $# != 1 ]]; then
+    echo "Usage: $0 <file>" >&2
+    exit 1
+fi
+
+cd_repo
+git add "$1"
+git commit -m "Add file $1"
+git push

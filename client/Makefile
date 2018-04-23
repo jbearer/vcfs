@@ -2,10 +2,10 @@ CFLAGS = -g -Og -Wall -Wextra -Werror
 
 FUSEFLAGS = `pkg-config fuse --cflags --libs`
 
-all: client
+all: vcfs-client
 
 clean:
-	rm -r client
+	rm -r vcfs-client
 
-client: client.c
+vcfs-client: client.c
 	$(CC) $(CFLAGS) -o $@ $^ $(FUSEFLAGS)

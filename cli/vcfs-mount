@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+set -e
+
+source vcfs-lib
+
+if [[ $# != 4 ]]; then
+    echo "Usage: $0 <mnt> <remote> <ip> <port>" >&2
+    exit 1
+fi
+
+mnt="$1"
+remote="$2"
+ip="$3"
+port="$4"
+
+PREFIX="`vcfs_prefix`"
+
+if [ ! -d "$PREFIX/$mnt" ]; then
+    git clone "$remote" "$PREFIX/$mnt"
+fi
+
+vcfs-client "$mnt" "$ip" "$port"
