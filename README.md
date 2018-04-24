@@ -6,5 +6,5 @@ Often users work on multiple computers but want access to the same files, such a
 1) On your server set up by running: vcfs-serve <repo>
 2) On your client (ie local computer): vcfs-mount <mnt> <remote> <ip> <port>
    Note: port is defaulted to 9091 in server setup but may be modified by setting VCFS_CLIENT_PORT environment variable on server setup
-(Optional) 3) To share files (files are *not* shared by default): vcfs-add <file>
-(Optional) 4) In the event of a conflict use vcfs-merge to resolve the conflict
+3) To share files (files are *not* shared by default): vcfs-add <file>
+4) In the event of a conflict use vcfs-merge to resolve the conflict
